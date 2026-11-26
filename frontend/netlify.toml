@@ -1,0 +1,21 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# 1) /api so'rovlarini EC2 dagi nginx ga uzatish (brauzer faqat Netlify bilan gaplashadi,
+#    shuning uchun CORS va "mixed content" muammosi bo'lmaydi).
+#    !!! EC2_PUBLIC_IP ni o'z EC2 serveringiz IP manzili bilan almashtiring !!!
+[[redirects]]
+  from   = "/api/*"
+  to     = "http://EC2_PUBLIC_IP/api/:splat"
+  status = 200
+  force  = true
+
+# 2) React Router uchun (sahifani yangilaganda 404 chiqmasligi uchun)
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200

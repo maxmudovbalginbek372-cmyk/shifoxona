@@ -1,0 +1,237 @@
+=====================================================================
+ MedCare BACKEND — AWS EC2 ga joylashtirish (Ubuntu 22.04 / 24.04)
+=====================================================================
+
+Reja:  Brauzer -> Netlify (frontend) --/api--> EC2: nginx (80) -> Node.js (4000)
+
+Nima kerak: AWS akkaunt, kompyuteringizda terminal (Windows: PowerShell yoki
+Git Bash), loyihaning backend/ papkasi.
+
+
+---------------------------------------------------------------------
+1-QADAM. EC2 serverini yaratish (AWS Console)
+---------------------------------------------------------------------
+1. AWS Console -> EC2 -> "Launch instance".
+2. Name: medcare-api
+3. AMI: Ubuntu Server 24.04 LTS
+4. Instance type: t3.micro (yoki t2.micro — Free Tier)
+5. Key pair: "Create new key pair" -> nomi medcare-key, format .pem -> yuklab
+   oling va XAVFSIZ joyda saqlang (yo'qolsa, serverga kira olmaysiz).
+6. Network settings -> Security group (Inbound qoidalar):
+     SSH    22   — Source: "My IP"   (faqat sizning IP)
+     HTTP   80   — Source: Anywhere (0.0.0.0/0)
+     HTTPS  443  — Source: Anywhere (0.0.0.0/0)
+   !!! 4000-portni OCHMANG — Node faqat nginx orqali ishlaydi.
+7. Storage: 8-20 GB (gp3).
+8. "Launch instance".
+
+IP o'zgarmasligi uchun (juda muhim — Netlify shu IP ga ulanadi):
+   EC2 -> Elastic IPs -> "Allocate Elastic IP address" -> Allocate ->
+   Actions -> "Associate Elastic IP address" -> medcare-api instance ni tanlang.
+   Bundan keyin shu IP ni  <EC2_IP>  deb yozamiz.
+
+
+---------------------------------------------------------------------
+2-QADAM. Serverga ulanish
+---------------------------------------------------------------------
+Kompyuteringizda (kalit joylashgan papkada):
+
+   chmod 400 medcare-key.pem                  (Windows PowerShell da shart emas)
+   ssh -i medcare-key.pem ubuntu@<EC2_IP>
+
+Birinchi marta "Are you sure...?" desa — yes deb yozing.
+
+
+---------------------------------------------------------------------
+3-QADAM. Serverda Node.js 20, nginx va pm2 o'rnatish
+---------------------------------------------------------------------
+(Bu buyruqlar SERVER ichida, ssh orqali ulanganingizdan keyin ishlaydi.)
+
+   sudo apt update && sudo apt -y upgrade
+   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+   sudo apt install -y nodejs nginx
+   sudo npm install -g pm2
+
+   node -v        # v20.x chiqishi kerak
+
+
+---------------------------------------------------------------------
+4-QADAM. Backend kodini serverga ko'chirish
+---------------------------------------------------------------------
+Variant A — scp bilan (KOMPYUTERINGIZDA, shifoxona papkasining ichida):
+
+   scp -i medcare-key.pem -r backend ubuntu@<EC2_IP>:~/medcare-backend
+
+   (node_modules papkangiz bo'lsa, avval uni o'chiring yoki ko'chirmang —
+    serverda qaytadan o'rnatiladi.)
+
+Variant B — git orqali (kodni GitHub ga qo'ygan bo'lsangiz, SERVERDA):
+
+   git clone https://github.com/<login>/<repo>.git ~/medcare
+   cd ~/medcare/backend
+
+
+---------------------------------------------------------------------
+5-QADAM. Paketlarni o'rnatish va sozlash (SERVERDA)
+---------------------------------------------------------------------
+   cd ~/medcare-backend
+   npm install --omit=dev
+
+Maxfiy kalit (JWT) yaratish:
+
+   openssl rand -hex 32
+
+Chiqqan uzun satrni nusxalang va sozlamalar faylini oching:
+
+   nano ecosystem.config.cjs
+
+"JWT_SECRET" qiymatini shu satrga almashtiring.
+Saqlash: Ctrl+O, Enter, chiqish: Ctrl+X.
+
+
+---------------------------------------------------------------------
+6-QADAM. Backendni pm2 bilan ishga tushirish (SERVERDA)
+---------------------------------------------------------------------
+   pm2 start ecosystem.config.cjs
+   pm2 save
+   pm2 startup
+
+"pm2 startup" bitta "sudo env PATH=... pm2 startup systemd -u ubuntu ..."
+ko'rinishidagi buyruq chiqaradi — uni nusxalab, ishga tushiring. Shunda server
+qayta yonganda ham backend o'zi ishga tushadi.
+
+Tekshirish:
+
+   pm2 status                              # medcare-api  -> online
+   curl http://127.0.0.1:4000/api/health   # {"ok":true,...}
+
+Loglar:  pm2 logs medcare-api
+Qayta ishga tushirish:  pm2 restart medcare-api
+
+
+---------------------------------------------------------------------
+7-QADAM. nginx sozlash (80-port -> Node 4000) (SERVERDA)
+---------------------------------------------------------------------
+   sudo nano /etc/nginx/sites-available/medcare
+
+Quyidagini yozing:
+
+   server {
+       listen 80 default_server;
+       server_name _;
+       client_max_body_size 1m;
+
+       location /api/ {
+           proxy_pass http://127.0.0.1:4000;
+           proxy_http_version 1.1;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+       }
+   }
+
+Yoqish:
+
+   sudo ln -sf /etc/nginx/sites-available/medcare /etc/nginx/sites-enabled/medcare
+   sudo rm -f /etc/nginx/sites-enabled/default
+   sudo nginx -t                  # "syntax is ok" chiqishi kerak
+   sudo systemctl reload nginx
+
+Tashqaridan tekshirish (O'Z KOMPYUTERINGIZDA yoki brauzerda):
+
+   http://<EC2_IP>/api/health      ->  {"ok":true,"time":"..."}
+
+Ochilmasa: Security group da 80-port ochiqligini va "pm2 status" ni tekshiring.
+
+
+---------------------------------------------------------------------
+8-QADAM. Frontendni Netlify ga ulash
+---------------------------------------------------------------------
+1. frontend/netlify.toml faylini oching va
+
+      to = "http://EC2_PUBLIC_IP/api/:splat"
+
+   qatoridagi EC2_PUBLIC_IP ni haqiqiy Elastic IP ga almashtiring
+   (masalan: http://3.120.45.67/api/:splat).
+
+2. Netlify ga joylashtirish:
+
+   A) GitHub orqali (tavsiya): loyihani GitHub ga yuklang ->
+      Netlify -> Add new site -> Import from Git -> repo ni tanlang ->
+         Base directory:    frontend
+         Build command:     npm run build
+         Publish directory: dist        (Base directory ichida, ya'ni frontend/dist)
+      -> Deploy.
+
+   B) Netlify CLI bilan (Git kerak emas), kompyuteringizda:
+         cd frontend
+         npm install
+         npm run build
+         npx netlify-cli login
+         npx netlify-cli deploy --prod --dir=dist
+      CLI frontend/ ichidagi netlify.toml ni o'qiydi, shuning uchun /api
+      yo'naltirishi ishlaydi.
+      DIQQAT: dist/ papkani saytga "sudrab tashlash" (drag & drop) usuli
+      netlify.toml ni hisobga olmaydi — /api ishlamaydi. Undan foydalanmang.
+
+3. Sayt manzili (masalan https://medcare-xyz.netlify.app) ochiladi.
+   Login: admin / admin123.
+
+Qanday ishlaydi: Netlify "/api/*" so'rovlarini o'zi EC2 ga uzatadi, shuning
+uchun brauzer faqat HTTPS Netlify bilan gaplashadi — CORS va "mixed content"
+xatolari bo'lmaydi.
+
+
+---------------------------------------------------------------------
+9-QADAM (ixtiyoriy, tavsiya). Domen + HTTPS
+---------------------------------------------------------------------
+Domeningiz bo'lsa (masalan api.sizning-domen.uz):
+1. DNS da A yozuv: api  ->  <EC2_IP>
+2. SERVERDA:
+      sudo apt install -y certbot python3-certbot-nginx
+      sudo sed -i 's/server_name _;/server_name api.sizning-domen.uz;/' /etc/nginx/sites-available/medcare
+      sudo nginx -t && sudo systemctl reload nginx
+      sudo certbot --nginx -d api.sizning-domen.uz
+3. netlify.toml da:  to = "https://api.sizning-domen.uz/api/:splat"
+   Qayta deploy qiling.
+
+
+---------------------------------------------------------------------
+Ma'lumotlar, zaxira va yangilash
+---------------------------------------------------------------------
+* Barcha ma'lumotlar:  ~/medcare-backend/data.json  (JSON fayl).
+* Zaxira (kunlik, 03:00) — SERVERDA "crontab -e" ga qo'shing:
+
+      0 3 * * * cp ~/medcare-backend/data.json ~/medcare-backend/data.$(date +\%F).bak
+
+  Eski nusxalarni vaqti-vaqti bilan o'chirib turing yoki S3 ga ko'chiring.
+* Kodni yangilash: yangi backend/ ni scp bilan yuboring (data.json ni
+  ustidan yozmang!), keyin:  cd ~/medcare-backend && npm install --omit=dev && pm2 restart medcare-api
+* Demo ma'lumotlarni tozalash (haqiqiy ishdan oldin):
+      cd ~/medcare-backend && pm2 stop medcare-api && npm run reset && pm2 start medcare-api
+  Eslatma: baza bo'sh bo'lsa, server yana demo ma'lumotlar bilan to'ldiradi
+  (db.js dagi seed). Haqiqiy ishlatishdan oldin seed ni o'zgartirish kerak.
+
+
+---------------------------------------------------------------------
+XAVFSIZLIK — ALBATTA O'QING
+---------------------------------------------------------------------
+* Demo loginlar (admin/admin123, reg/reg123, dr.*/doctor123) hamma uchun
+  ma'lum. Internetga ochiq serverda ularni o'zgartiring yoki o'chiring.
+  Hozircha parolni almashtirish sahifasi yo'q — db.js dagi seed
+  (hash(...) qatorlari) ni o'zgartirib, bazani qayta yarating.
+* JWT_SECRET ni albatta almashtiring (6-qadam).
+* Haqiqiy bemor ma'lumotlari uchun: HTTPS (9-qadam), PostgreSQL kabi haqiqiy
+  baza va muntazam zaxira kerak. Hozirgi JSON-baza sinov/o'quv uchun.
+* SSH (22) ni faqat o'z IP ingizga oching.
+
+
+---------------------------------------------------------------------
+Muammolar
+---------------------------------------------------------------------
+* Saytda "Serverga ulanib bo'lmadi":  Netlify da netlify.toml dagi IP to'g'rimi?
+  http://<EC2_IP>/api/health brauzerda ochiladimi?
+* 502 Bad Gateway:  pm2 status / pm2 logs medcare-api — backend ishlayaptimi?
+* Sahifa yangilanganda 404:  netlify.toml dagi "/*" -> "/index.html" qoidasi bor.
+* Instance to'xtatilib qayta yoqilsa IP o'zgaradi — shuning uchun Elastic IP kerak.
