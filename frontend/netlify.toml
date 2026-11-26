@@ -10,7 +10,7 @@
 #    !!! EC2_PUBLIC_IP ni o'z EC2 serveringiz IP manzili bilan almashtiring !!!
 [[redirects]]
   from   = "/api/*"
-  to     = "http://EC2_PUBLIC_IP/api/:splat"
+  to = "http://16.179.208.213/api/:splat"
   status = 200
   force  = true
 
